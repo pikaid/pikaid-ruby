@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Ruby ${{ matrix.ruby }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        ruby: ["2.7", "3.0", "3.1", "3.2", "3.3", "3.4", "3.5"]
+        include:
+          # Ruby 2.6 predates OpenSSL 3; pin it to a runner image whose
+          # toolchain ruby-build can still satisfy.
+          - os: ubuntu-22.04
+            ruby: "2.6"
+          - os: macos-latest
+            ruby: "3.5"
+          - os: windows-latest
+            ruby: "3.5"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+
+      - name: Syntax and warning checks
+        run: |
+          bundle exec rake syntax
+          ruby -w -Ilib -e 'require "pikaid"; Pikaid.generate'
+
+      - name: Test
+        run: bundle exec rake test
+
+      - name: Build gem
+        run: gem build pikaid.gemspec
+
+  coverage:
+    name: Coverage (Ruby 3.4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: Line coverage gate
+        run: bundle exec rake coverage

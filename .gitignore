@@ -1,0 +1,8 @@
+/.bundle/
+/Gemfile.lock
+/pkg/
+/coverage/
+/*.gem
+.DS_Store
+.ai/run/
+.ai/references/
