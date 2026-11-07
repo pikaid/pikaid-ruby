@@ -276,7 +276,8 @@ No unresolved correctness, security, format, or packaging blocker remains.
 
 **Score: 92/100**
 **Status: READY**
-**`task_result: PASS`**
+
+task_result: PASS
 
 Rationale for the score: every mandatory hardening obligation is met and the
 full matrix is green, including real Windows test execution and an installed-gem
