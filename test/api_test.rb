@@ -94,6 +94,20 @@ class ApiTest < PikaidTest
     assert_equal :found, table[regenerated]
   end
 
+  def test_hash_contract_holds_for_subclasses
+    text = "0s44we8002loz3po6mcf6vsn23"
+    parsed = Pikaid.parse(text)
+    subclass = Class.new(Pikaid::Id)
+    subclassed = subclass.new(parsed.timestamp, parsed.randomness)
+
+    assert_equal parsed, subclassed
+    assert parsed.eql?(subclassed)
+    assert_equal parsed.hash, subclassed.hash
+
+    table = { parsed => :found }
+    assert_equal :found, table[subclassed]
+  end
+
   def test_inspect_is_compact_and_unambiguous
     id = Pikaid.parse("00000000000000000000000000")
 

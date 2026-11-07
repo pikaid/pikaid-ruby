@@ -97,8 +97,14 @@ module Pikaid
 
     alias eql? ==
 
+    # Hash consistent with {#==} and {#eql?}.
+    #
+    # Equality is defined by the canonical value, not by the concrete class, so
+    # the hash must be derived from the value alone. Including +self.class+
+    # would let a subclass instance compare equal to a base instance while
+    # hashing differently, breaking Hash lookup for equal values.
     def hash
-      [self.class, @string].hash
+      @string.hash
     end
 
     def inspect

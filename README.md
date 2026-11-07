@@ -26,8 +26,11 @@ Official PHP v1.2.0 vectors are used as independent interoperability fixtures.
   (`securerandom` is the only cryptographic dependency).
 
 The library is tested locally on Ruby 2.6.10 (macOS, universal ARM64). GitHub
-Actions is configured to test MRI/YARV Ruby 2.6 through 3.5 on Ubuntu, plus
-macOS and Windows for Ruby 3.5.
+Actions tests MRI/YARV Ruby 2.6 through 3.5 on Ubuntu, Ruby 3.5 on macOS, and
+Ruby 3.4 on Windows (ruby/setup-ruby does not yet provide a Windows build of
+Ruby 3.5). A separate job installs the built gem into an isolated `GEM_HOME`
+and exercises it from a consumer script, so packaging regressions are caught
+outside the checkout.
 
 ## Installation
 

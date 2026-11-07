@@ -24,8 +24,11 @@ jobs:
             ruby: "2.6"
           - os: macos-latest
             ruby: "3.5"
+          # ruby/setup-ruby has no Ruby 3.5 build for windows-2025 yet, so the
+          # Windows cell tracks the newest version it can install (3.4). The
+          # Ubuntu and macOS cells still exercise 3.5.
           - os: windows-latest
-            ruby: "3.5"
+            ruby: "3.4"
     steps:
       - uses: actions/checkout@v4
 
@@ -60,3 +63,52 @@ jobs:
 
       - name: Line coverage gate
         run: bundle exec rake coverage
+
+  package:
+    name: Package install smoke (Ruby 3.4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+
+      - name: Build gem
+        run: gem build pikaid.gemspec
+
+      - name: Install gem into an isolated GEM_HOME
+        run: gem install --install-dir "$RUNNER_TEMP/pikaid-gem" --no-document ./pikaid-*.gem
+
+      - name: Consumer smoke test
+        env:
+          GEM_HOME: ${{ runner.temp }}/pikaid-gem
+          GEM_PATH: ${{ runner.temp }}/pikaid-gem
+        run: |
+          mkdir -p "$RUNNER_TEMP/pikaid-consumer"
+          cd "$RUNNER_TEMP/pikaid-consumer"
+          cat > consumer.rb <<'RUBY'
+          require "pikaid"
+
+          vector = "0s44we8002loz3po6mcf6vsn23"
+          expected_binary = "006553f10000112233445566778899aabb"
+
+          parsed = Pikaid.parse(vector)
+          abort "vector timestamp mismatch" unless parsed.timestamp == 1_700_000_000
+          abort "vector binary mismatch" unless parsed.to_binary.unpack("H*")[0] == expected_binary
+          abort "vector round trip failed" unless Pikaid.from_binary(parsed.to_binary) == parsed
+
+          generated = Pikaid.generate
+          abort "generated value has wrong width" unless generated.bytesize == Pikaid::STRING_LENGTH
+          abort "generated value is invalid" unless Pikaid.valid?(generated)
+          abort "generated binary is invalid" unless Pikaid.valid_binary?(Pikaid.to_binary(generated))
+
+          loaded = $LOADED_FEATURES.grep(%r{/pikaid\.rb\z}).first
+          abort "pikaid was not loaded from the installed gem: #{loaded.inspect}" unless loaded
+          abort "pikaid loaded outside GEM_HOME: #{loaded}" unless loaded.start_with?(ENV.fetch("GEM_HOME"))
+          abort "unexpected pikaid version: #{Pikaid::VERSION}" unless Pikaid::VERSION == "0.1.0"
+
+          puts "consumer smoke OK: #{loaded}"
+          RUBY
+          ruby -w consumer.rb
