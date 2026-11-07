@@ -1,0 +1,4 @@
+# The vendored official vectors are hashed byte-for-byte in
+# test/vectors_test.rb. Force LF in the working tree on every platform so a
+# Windows checkout with core.autocrlf cannot change their SHA-256 digests.
+test/vectors/*.json text eol=lf
