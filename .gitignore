@@ -4,7 +4,7 @@
 /coverage/
 /*.gem
 .DS_Store
-.ai/run/
-.ai/references/
 
-/.??
+# Local-only generated and working artifacts. This directory is never tracked
+# and never packaged; it belongs to the local workspace only.
+/.ai/

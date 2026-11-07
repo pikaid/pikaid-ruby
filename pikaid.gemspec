@@ -14,15 +14,17 @@ Gem::Specification.new do |spec|
   spec.license = "MIT"
   spec.required_ruby_version = ">= 2.6.0"
 
+  # Only distributable sources. Local workspace artifacts (.ai/), tests, CI
+  # configuration, and build leftovers must never ship in the gem.
   spec.files = Dir.chdir(__dir__) do
-    Dir["lib/**/*.rb", "README.md", "LICENSE"].sort
+    Dir["lib/**/*.rb", "README.md", "LICENSE", "CHANGELOG.md"].sort
   end
   spec.require_paths = ["lib"]
 
   spec.metadata = {
     "homepage_uri" => spec.homepage,
     "source_code_uri" => spec.homepage,
-    "changelog_uri" => "#{spec.homepage}/releases",
+    "changelog_uri" => "#{spec.homepage}/blob/main/CHANGELOG.md",
     "rubygems_mfa_required" => "true"
   }
 

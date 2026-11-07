@@ -107,8 +107,27 @@ jobs:
           loaded = $LOADED_FEATURES.grep(%r{/pikaid\.rb\z}).first
           abort "pikaid was not loaded from the installed gem: #{loaded.inspect}" unless loaded
           abort "pikaid loaded outside GEM_HOME: #{loaded}" unless loaded.start_with?(ENV.fetch("GEM_HOME"))
-          abort "unexpected pikaid version: #{Pikaid::VERSION}" unless Pikaid::VERSION == "0.1.0"
+          abort "unexpected pikaid version: #{Pikaid::VERSION}" unless Pikaid::VERSION == "1.0.0"
 
           puts "consumer smoke OK: #{loaded}"
           RUBY
           ruby -w consumer.rb
+
+      - name: Verify packaged file inventory
+        run: |
+          ruby -w -rrubygems/package -e '
+            gem_file = Dir["pikaid-*.gem"].max
+            abort "no built gem found" unless gem_file
+
+            files = Gem::Package.new(gem_file).spec.files
+            leaked = files.grep(%r{\A(?:\.ai/|test/|\.)})
+            abort "package leaks non-shippable files: #{leaked.join(", ")}" unless leaked.empty?
+
+            missing = %w[README.md LICENSE CHANGELOG.md] - files
+            abort "package is missing required files: #{missing.join(", ")}" unless missing.empty?
+
+            missing_lib = Dir["lib/**/*.rb"] - files
+            abort "package is missing library files: #{missing_lib.join(", ")}" unless missing_lib.empty?
+
+            puts "package inventory OK: #{files.size} files in #{gem_file}"
+          '

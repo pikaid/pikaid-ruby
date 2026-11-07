@@ -166,8 +166,8 @@ class ApiTest < PikaidTest
     end
   end
 
-  def test_version_is_a_pre_release_string
+  def test_version_is_a_stable_semver_string
     assert_match(/\A\d+\.\d+\.\d+\z/, Pikaid::VERSION)
-    assert_equal "0.1.0", Pikaid::VERSION
+    assert_equal "1.0.0", Pikaid::VERSION
   end
 end

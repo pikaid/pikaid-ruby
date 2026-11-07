@@ -8,7 +8,7 @@
 
 # pikaid — Official Ruby Implementation
 
-**Status: source-only pre-release (`0.1.0`). Not published to RubyGems.**
+**Status: stable `1.0.0` — release prepared. Not yet published to RubyGems.**
 
 This is the official Ruby implementation of [pikaid](https://github.com/pikaid): a
 compact, chronologically sortable identifier for databases, APIs, and distributed
@@ -25,16 +25,21 @@ Official PHP v1.2.0 vectors are used as independent interoperability fixtures.
 - No runtime dependencies beyond the Ruby standard library
   (`securerandom` is the only cryptographic dependency).
 
+Ruby 2.6 is end-of-life upstream. It stays in the supported range and in CI
+because the gemspec still declares it; the maintenance cost of keeping it is a
+single Ubuntu 22.04 matrix cell.
+
 The library is tested locally on Ruby 2.6.10 (macOS, universal ARM64). GitHub
 Actions tests MRI/YARV Ruby 2.6 through 3.5 on Ubuntu, Ruby 3.5 on macOS, and
 Ruby 3.4 on Windows (ruby/setup-ruby does not yet provide a Windows build of
 Ruby 3.5). A separate job installs the built gem into an isolated `GEM_HOME`
-and exercises it from a consumer script, so packaging regressions are caught
-outside the checkout.
+and exercises it from a consumer script, and verifies the packaged file
+inventory, so packaging regressions are caught outside the checkout.
 
 ## Installation
 
-This gem is **not published** yet. Install it from source:
+Version `1.0.0` is prepared but the gem is **not published** to RubyGems yet, so
+`gem install pikaid` does not apply. Install it from source:
 
 ```sh
 git clone https://github.com/pikaid/pikaid-ruby.git
@@ -47,8 +52,12 @@ To build and install a local gem:
 
 ```sh
 gem build pikaid.gemspec
-gem install ./pikaid-0.1.0.gem
+gem install ./pikaid-1.0.0.gem
 ```
+
+The built package contains only `lib/**/*.rb`, `README.md`, `LICENSE`, and
+`CHANGELOG.md`. Local `.ai/` workspace artifacts, tests, CI configuration, and
+build leftovers are never packaged.
 
 ## Usage
 
@@ -157,4 +166,5 @@ cryptographic failure paths.
 ## Specification and license
 
 - [pikaid specification revision 1.0.4](https://github.com/pikaid/pikaid-specs/tree/v1.0.4)
+- [Changelog](CHANGELOG.md)
 - [MIT License](LICENSE) · Copyright (c) 2026 larananas (Lara G.)
