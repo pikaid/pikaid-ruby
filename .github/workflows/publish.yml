@@ -62,7 +62,9 @@ jobs:
         uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199 # v1
         with:
           ruby-version: "3.4"
-          bundler-cache: true
+
+      - name: Install dependencies without shared caches
+        run: bundle install --jobs 4 --retry 3
 
       - name: Validate exact version and successful main-branch CI
         id: validate
