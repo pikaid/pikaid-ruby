@@ -1,0 +1,285 @@
+name: CI
+
+on:
+  # Every pushed commit must be validated on every branch; branch-filtered
+  # pushes would let a broken branch go untested until a pull request.
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Ruby ${{ matrix.ruby }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        ruby: ["2.7", "3.0", "3.1", "3.2", "3.3", "3.4", "4.0"]
+        include:
+          # Ruby 2.6 predates OpenSSL 3; pin it to a runner image whose
+          # toolchain ruby-build can still satisfy.
+          - os: ubuntu-22.04
+            ruby: "2.6"
+          - os: macos-latest
+            ruby: "4.0"
+          # Ruby 4.0 is the newest stable MRI line and has ruby/setup-ruby
+          # builds on Ubuntu, macOS, and Windows. Ruby 3.5 was never released.
+          - os: windows-latest
+            ruby: "4.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+
+      - name: Syntax and warning checks
+        run: |
+          bundle exec rake syntax
+          ruby -w -Ilib -e 'require "pikaid"; Pikaid.generate'
+
+      - name: Test
+        run: bundle exec rake test
+
+      - name: Pinned conformance matrix
+        run: bundle exec ruby -Ilib -Itest test/conformance_test.rb
+
+      - name: Build gem
+        run: gem build pikaid.gemspec
+
+  official-conformance:
+    name: Official conformance (pinned suite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check out the pinned official suite
+        env:
+          SUITE_COMMIT: 059780cc0e5b113443812720d95c630649bf3aa3
+        run: |
+          suite_dir="$RUNNER_TEMP/pikaid-specs"
+          git init "$suite_dir"
+          cd "$suite_dir"
+          git remote add origin https://github.com/pikaid/pikaid-specs.git
+          git fetch --depth 1 origin "$SUITE_COMMIT"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SUITE_COMMIT"
+
+      - name: Verify suite package and independent oracle
+        working-directory: ${{ runner.temp }}/pikaid-specs/conformance
+        run: |
+          python -m pip install -r tools/requirements.txt
+          python tools/verify_vectors.py \
+            --expect-status OFFICIAL \
+            --expect-package-revision 1.0.0 \
+            --expect-spec-revision 1.0.4
+          PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tools/tests -v
+          node tools/verify_oracle_node.mjs
+
+      - name: Run the official adapter suite
+        working-directory: ${{ runner.temp }}/pikaid-specs/conformance
+        run: |
+          python tools/run_adapter.py \
+            --automated-only \
+            --report-json "$RUNNER_TEMP/official-conformance-result.json" \
+            -- ruby -I"$GITHUB_WORKSPACE/lib" "$GITHUB_WORKSPACE/test/support/official_adapter.rb"
+
+      - name: Upload the conformance report
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-conformance-report
+          path: ${{ runner.temp }}/official-conformance-result.json
+          if-no-files-found: error
+
+  coverage:
+    name: Coverage (Ruby 3.4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: Line coverage gate
+        run: bundle exec rake coverage
+
+  package:
+    name: Package install smoke (Ruby 3.4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+
+      - name: Build gem
+        run: gem build pikaid.gemspec
+
+      - name: Verify source archive hygiene
+        run: |
+          if ! grep -qx '/.ai/' .gitignore; then
+            echo "::error::.gitignore must contain the explicit /.ai/ rule"
+            exit 1
+          fi
+          if [ -n "$(git ls-files '.ai/**')" ]; then
+            echo "::error::.ai/ must never be tracked"
+            git ls-files '.ai/**'
+            exit 1
+          fi
+          archive="$RUNNER_TEMP/pikaid-source.tar"
+          git archive --format=tar --output="$archive" HEAD
+          if tar -tf "$archive" | grep -E '(^|/)\.ai/'; then
+            echo "::error::source archive contains .ai/"
+            exit 1
+          fi
+          for required in lib/pikaid.rb README.md LICENSE CHANGELOG.md pikaid.gemspec; do
+            tar -tf "$archive" | grep -qx "$required" || {
+              echo "::error::source archive is missing $required"
+              exit 1
+            }
+          done
+          if tar -tf "$archive" | grep -E '(^|/)(\.DS_Store|\.gem|coverage/|pkg/)'; then
+            echo "::error::source archive contains local build artifacts"
+            exit 1
+          fi
+          echo "source archive hygiene OK: $(tar -tf "$archive" | wc -l) entries"
+
+      - name: Install gem into an isolated GEM_HOME
+        run: gem install --install-dir "$RUNNER_TEMP/pikaid-gem" --no-document ./pikaid-*.gem
+
+      - name: Consumer smoke test
+        env:
+          GEM_HOME: ${{ runner.temp }}/pikaid-gem
+          GEM_PATH: ${{ runner.temp }}/pikaid-gem
+        run: |
+          mkdir -p "$RUNNER_TEMP/pikaid-consumer"
+          cd "$RUNNER_TEMP/pikaid-consumer"
+          cat > consumer.rb <<'RUBY'
+          require "pikaid"
+
+          vector = "0s44we8002loz3po6mcf6vsn23"
+          expected_binary = "006553f10000112233445566778899aabb"
+
+          # Published constants.
+          abort "string length mismatch" unless Pikaid::STRING_LENGTH == 26
+          abort "binary length mismatch" unless Pikaid::BINARY_LENGTH == 17
+          abort "max timestamp mismatch" unless Pikaid::MAX_TIMESTAMP == 78_364_164_095
+          abort "max randomness mismatch" unless Pikaid::MAX_RANDOMNESS == (2**96) - 1
+          abort "alphabet mismatch" unless Pikaid::ALPHABET == "0123456789abcdefghijklmnopqrstuvwxyz"
+
+          # README parse/decode example.
+          parsed = Pikaid.parse(vector)
+          abort "vector timestamp mismatch" unless parsed.timestamp == 1_700_000_000
+          abort "vector entropy mismatch" unless parsed.randomness_hex == "00112233445566778899aabb"
+          abort "vector entropy alias mismatch" unless parsed.entropy == parsed.randomness
+          abort "vector entropy hex alias mismatch" unless parsed.entropy_hex == parsed.randomness_hex
+          abort "vector text mismatch" unless parsed.to_s == vector
+          abort "vector binary mismatch" unless parsed.to_binary.unpack("H*")[0] == expected_binary
+          abort "vector round trip failed" unless Pikaid.from_binary(parsed.to_binary) == parsed
+          abort "UTC conversion failed" unless Time.at(parsed.timestamp).utc.strftime("%Y-%m-%dT%H:%M:%SZ") == "2023-11-14T22:13:20Z"
+
+          # Public module API.
+          %i[generate generate_binary parse from_binary valid? valid_binary?
+             well_formed? timestamp randomness entropy decode to_binary compare].each do |name|
+            abort "missing module API #{name}" unless Pikaid.respond_to?(name)
+          end
+          %i[timestamp randomness entropy randomness_hex entropy_hex to_s to_binary].each do |name|
+            abort "missing Id API #{name}" unless parsed.respond_to?(name)
+          end
+          abort "decode mismatch" unless Pikaid.decode(parsed) == [1_700_000_000, parsed.randomness]
+          abort "timestamp helper mismatch" unless Pikaid.timestamp(vector) == 1_700_000_000
+          abort "randomness helper mismatch" unless Pikaid.randomness(vector) == parsed.randomness
+          abort "entropy helper mismatch" unless Pikaid.entropy(vector) == parsed.randomness
+          abort "to_binary helper mismatch" unless Pikaid.to_binary(vector) == parsed.to_binary
+          abort "compare mismatch" unless Pikaid.compare(vector, parsed) == 0
+
+          # Validation semantics: shape-only vs. full validation.
+          abort "valid? mismatch" unless Pikaid.valid?(vector)
+          abort "valid_binary? mismatch" unless Pikaid.valid_binary?(parsed.to_binary)
+          overflow = "0000000" + ("z" * 19)
+          abort "well_formed? mismatch" unless Pikaid.well_formed?(overflow)
+          abort "96-bit overflow accepted" if Pikaid.valid?(overflow)
+          begin
+            Pikaid.parse(overflow)
+            abort "overflow parse did not raise"
+          rescue Pikaid::InvalidIdError => error
+            abort "overflow reason mismatch" unless error.reason == :randomness_overflow
+          end
+
+          # Boundary values.
+          max_id = Pikaid.parse("zzzzzzz7oiylpimjg5u2ca1ypr")
+          abort "max timestamp mismatch" unless max_id.timestamp == Pikaid::MAX_TIMESTAMP
+          abort "max entropy mismatch" unless max_id.randomness_hex == "ffffffffffffffffffffffff"
+          abort "max binary mismatch" unless max_id.to_binary.unpack("H*")[0] == "123ede3fffffffffffffffffffffffffff"
+
+          # Generation, including explicit timestamps.
+          generated = Pikaid.generate
+          abort "generated value has wrong width" unless generated.bytesize == Pikaid::STRING_LENGTH
+          abort "generated value is invalid" unless Pikaid.valid?(generated)
+          abort "generated binary is invalid" unless Pikaid.valid_binary?(Pikaid.to_binary(generated))
+          explicit = Pikaid.generate(timestamp: 1_700_000_000)
+          abort "explicit timestamp not preserved" unless Pikaid.timestamp(explicit) == 1_700_000_000
+          explicit_binary = Pikaid.generate_binary(timestamp: 1_700_000_000)
+          abort "explicit binary width" unless explicit_binary.bytesize == Pikaid::BINARY_LENGTH
+          abort "explicit binary timestamp" unless Pikaid.from_binary(explicit_binary).timestamp == 1_700_000_000
+
+          # Same-second ordering follows the random suffix, not generation time.
+          same_second_low = Pikaid.parse("0000002" + ("0" * 19))
+          same_second_high = Pikaid.parse("0000002" + "7oiylpimjg5u2ca1ypr")
+          abort "same-second order mismatch" unless (same_second_low <=> same_second_high) == -1
+
+          # Provenance: the library must come from the installed gem.
+          loaded = $LOADED_FEATURES.grep(%r{/pikaid\.rb\z}).first
+          abort "pikaid was not loaded from the installed gem: #{loaded.inspect}" unless loaded
+          abort "pikaid loaded outside GEM_HOME: #{loaded}" unless loaded.start_with?(ENV.fetch("GEM_HOME"))
+          abort "unexpected pikaid version: #{Pikaid::VERSION}" unless Pikaid::VERSION == "1.0.0"
+
+          puts "consumer smoke OK: #{loaded}"
+          RUBY
+          ruby -w consumer.rb
+
+      - name: Verify packaged file inventory
+        run: |
+          ruby -w -rrubygems/package -e '
+            gem_file = Dir["pikaid-*.gem"].max
+            abort "no built gem found" unless gem_file
+
+            files = Gem::Package.new(gem_file).spec.files
+            leaked = files.grep(%r{\A(?:\.ai/|test/|\.)})
+            abort "package leaks non-shippable files: #{leaked.join(", ")}" unless leaked.empty?
+
+            missing = %w[README.md LICENSE CHANGELOG.md] - files
+            abort "package is missing required files: #{missing.join(", ")}" unless missing.empty?
+
+            missing_lib = Dir["lib/**/*.rb"] - files
+            abort "package is missing library files: #{missing_lib.join(", ")}" unless missing_lib.empty?
+
+            puts "package inventory OK: #{files.size} files in #{gem_file}"
+          '
