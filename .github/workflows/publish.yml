@@ -1,0 +1,220 @@
+name: Publish to RubyGems
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing published stable release tag (for example, v1.0.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Never publish two versions at the same time.
+concurrency:
+  group: rubygems-publish
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify tagged release and build gem
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - name: Validate existing stable GitHub release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Expected a stable vMAJOR.MINOR.PATCH tag."
+            exit 1
+          fi
+
+          published_tag="$(gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease \
+            --jq 'select(.isDraft == false and .isPrerelease == false) | .tagName')"
+          if [[ "$published_tag" != "$RELEASE_TAG" ]]; then
+            echo "::error::A published, non-prerelease GitHub release is required."
+            exit 1
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the immutable release tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/tags/${{ steps.release.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199 # v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: Validate exact version and successful main-branch CI
+        id: validate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::The release commit must be contained in main."
+            exit 1
+          fi
+
+          gem_id="$(ruby -rrubygems -e '
+            spec = Gem::Specification.load("pikaid.gemspec")
+            abort "Invalid gemspec" unless spec
+            puts "#{spec.name}@#{spec.version}"
+          ')"
+          version="${RELEASE_TAG#v}"
+          if [[ "$gem_id" != "pikaid@$version" ]]; then
+            echo "::error::Release $RELEASE_TAG does not match gemspec ($gem_id)."
+            exit 1
+          fi
+
+          ci_conclusion="$(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$sha&per_page=100" \
+            --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yml" and .event == "push" and .head_branch == "main")] | sort_by(.created_at) | last | .conclusion // ""')"
+          if [[ "$ci_conclusion" != "success" ]]; then
+            echo "::error::Complete main-branch CI must have succeeded for $sha (found: ${ci_conclusion:-none})."
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Validated $RELEASE_TAG at $sha, with successful full CI."
+
+      - name: Recheck source, coverage and conformance
+        run: |
+          set -euo pipefail
+          bundle exec rake syntax test coverage
+          bundle exec ruby -Ilib -Itest test/conformance_test.rb
+
+      - name: Build the distributable gem
+        shell: bash
+        env:
+          VERSION: ${{ steps.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p pkg
+          gem build pikaid.gemspec --output "pkg/pikaid-$VERSION.gem"
+
+      - name: Inspect gem and test installation in isolation
+        shell: bash
+        env:
+          VERSION: ${{ steps.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          ruby -rrubygems/package -e '
+            path = "pkg/pikaid-#{ENV.fetch("VERSION")}.gem"
+            gem = Gem::Package.new(path).spec
+            abort "Gem identity mismatch" unless gem.name == "pikaid" && gem.version.to_s == ENV.fetch("VERSION")
+            required = %w[lib/pikaid.rb README.md LICENSE CHANGELOG.md]
+            abort "Missing packaged files" unless (required - gem.files).empty?
+            abort "Unexpected repository files in gem" if gem.files.any? { |file| file.match?(%r{\A(?:\.ai/|\.github/|test/|pkg/)}) }
+          '
+          gem install --local --no-document --install-dir "$RUNNER_TEMP/pikaid-install" "pkg/pikaid-$VERSION.gem"
+          (
+            cd "$RUNNER_TEMP"
+            GEM_HOME="$RUNNER_TEMP/pikaid-install" \
+            GEM_PATH="$RUNNER_TEMP/pikaid-install" \
+            EXPECTED_VERSION="$VERSION" ruby -e '
+              require "pikaid"
+              abort "Installed version mismatch" unless Pikaid::VERSION == ENV.fetch("EXPECTED_VERSION")
+              id = Pikaid.generate
+              abort "Installed gem cannot generate valid identifiers" unless Pikaid.valid?(id)
+            '
+          )
+
+      - name: Upload verified gem
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-pikaid-gem
+          path: pkg/*.gem
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish verified gem
+    needs: verify
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download verified gem
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verified-pikaid-gem
+          path: pkg
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199 # v1
+        with:
+          ruby-version: "3.4"
+
+      - name: Refuse to overwrite a published version
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          url="https://rubygems.org/api/v2/rubygems/pikaid/versions/$VERSION.json"
+          status="$(curl --silent --show-error --location --retry 3 \
+            --output /dev/null --write-out '%{http_code}' "$url")"
+          case "$status" in
+            404) echo "Version $VERSION is not yet published." ;;
+            200)
+              echo "::error::pikaid $VERSION already exists on RubyGems; refusing to republish."
+              exit 1
+              ;;
+            *)
+              echo "::error::RubyGems version check failed (HTTP $status)."
+              exit 1
+              ;;
+          esac
+
+      - name: Authenticate with RubyGems (OIDC trusted publishing)
+        uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
+
+      - name: Publish to RubyGems
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: gem push "pkg/pikaid-$VERSION.gem"
+
+      - name: Verify published version
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          url="https://rubygems.org/api/v2/rubygems/pikaid/versions/$VERSION.json"
+          for attempt in {1..12}; do
+            published="$(curl --silent --show-error --location --fail "$url" 2>/dev/null || true)"
+            if [[ -n "$published" ]] && \
+               jq -e --arg expected "$VERSION" '.version == $expected' <<< "$published" >/dev/null 2>&1; then
+              echo "Published pikaid $VERSION: https://rubygems.org/gems/pikaid/versions/$VERSION"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::RubyGems has not confirmed the published version."
+          exit 1
