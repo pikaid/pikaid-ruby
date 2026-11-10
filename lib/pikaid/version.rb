@@ -5,5 +5,5 @@ module Pikaid
   #
   # The pikaid identifier format itself is immutable and unversioned; this
   # constant versions the Ruby library only.
-  VERSION = "1.0.0"
+  VERSION = "1.0.2"
 end
