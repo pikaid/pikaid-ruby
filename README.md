@@ -1,25 +1,46 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/pikaid/pikaid-specs/v1.0.4/logo.png" alt="pikaid" width="300" />
+  <a href="https://github.com/pikaid/pikaid-specs">
+    <img src="https://raw.githubusercontent.com/pikaid/pikaid-specs/v1.0.4/logo.png" alt="pikaid" width="300">
+  </a>
 </p>
 
 <p align="center">
   <strong>Small · Sortable · Secure ID generator</strong>
 </p>
 
-# pikaid — Official Ruby Implementation
+<div align="center">
 
-**Status: stable `1.0.0` — release prepared. Not yet published to RubyGems.**
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Ruby](https://img.shields.io/badge/language-Ruby-CC342D.svg)](https://github.com/pikaid/pikaid-ruby)
+[![CI](https://github.com/pikaid/pikaid-ruby/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pikaid/pikaid-ruby/actions/workflows/ci.yml)
+[![Official implementation](https://img.shields.io/badge/official-implementation-2e7d32.svg)](https://github.com/pikaid/pikaid-specs)
+[![Specification 1.0.4](https://img.shields.io/badge/spec-1.0.4-4b56a6.svg)](https://github.com/pikaid/pikaid-specs/tree/v1.0.4)
 
-This is the official Ruby implementation of [pikaid](https://github.com/pikaid): a
-compact, chronologically sortable identifier for databases, APIs, and distributed
-systems. The pikaid identifier format is immutable and unversioned:
-**26 lowercase Base36 characters** with a **17-byte binary representation**.
+</div>
 
-The normative definition is
-[pikaid specification revision 1.0.4](https://github.com/pikaid/pikaid-specs/tree/v1.0.4).
-Official PHP v1.2.0 vectors are used as independent interoperability fixtures.
+**pikaid** is the **official Ruby implementation** of a compact, chronologically sortable, collision-resistant identifier format for databases, APIs, and distributed systems.
 
-## Requirements
+This is the immutable, unversioned [pikaid format](https://github.com/pikaid/pikaid-specs/tree/v1.0.4), documented in specification revision **1.0.4**.
+
+## ✨ Why pikaid?
+
+- **Short:** Compact, readable IDs for URLs, logs, and API resources.
+- **Sortable:** Lexicographically ordered by timestamp, with **one-second precision**.
+- **Collision-resistant:** 96 bits of cryptographic randomness make collisions extremely unlikely, never impossible.
+- **Storage-friendly:** Use `BINARY(17)` or readable `CHAR(26)`.
+- **Distributed-friendly:** No central sequence generator or coordination required.
+
+## 🧬 Identifier format
+
+A pikaid contains **26 lowercase Base36 characters**: a **7-character Unix-seconds timestamp** followed by **19 characters encoding 96 bits of cryptographic randomness**. Its binary form is **17 bytes**: 5 unsigned big-endian timestamp bytes followed by 12 randomness bytes.
+
+![Identifier structure](https://raw.githubusercontent.com/pikaid/pikaid-specs/v1.0.4/structure.svg)
+
+> **Ordering:** Different seconds sort chronologically. Within the same second, randomness—not issuance order—decides the order.
+
+> **Security:** These are identifiers, **not secrets**, session credentials, authentication tokens, or API keys.
+
+## ⚙️ Requirements
 
 - Ruby **2.6 or newer** (`required_ruby_version >= 2.6.0`).
 - No runtime dependencies beyond the Ruby standard library
@@ -43,7 +64,7 @@ separate job installs the built gem into an isolated `GEM_HOME` and exercises
 it from a consumer script, and verifies the packaged file inventory, so
 packaging regressions are caught outside the checkout.
 
-## Installation
+## 📦 Installation
 
 Version `1.0.0` is prepared but the gem is **not published** to RubyGems yet, so
 `gem install pikaid` does not apply. Install it from source:
@@ -66,7 +87,33 @@ The built package contains only `lib/**/*.rb`, `README.md`, `LICENSE`, and
 `CHANGELOG.md`. Local `.ai/` workspace artifacts, tests, CI configuration, and
 build leftovers are never packaged.
 
-## Usage
+## 🚀 Basic Usage
+
+After installing the local gem, save the following as `demo.rb` and execute `ruby demo.rb`:
+
+```ruby
+require "pikaid"
+
+id = Pikaid.generate
+parsed = Pikaid.parse(id)
+bytes = parsed.to_binary
+raise "Invalid identifier" unless Pikaid.valid?(id)
+raise "Binary round-trip failed" unless Pikaid.from_binary(bytes) == parsed
+puts "#{id} @ #{parsed.timestamp}"
+```
+
+## 💡 Example Use Case
+
+Use pikaid to identify **users, orders, invoices, uploads, events, and API resources**. Independent services can generate compact IDs without a shared counter, while timestamp-based ordering helps with indexing, sorting, and logs.
+
+## 📚 Canonical specification
+
+- [Canonical specification](https://github.com/pikaid/pikaid-specs)
+- [Revision 1.0.4](https://github.com/pikaid/pikaid-specs/tree/v1.0.4)
+
+Specification revisions describe the format; they do not change the encoded identifiers.
+
+## 🧩 API Reference
 
 ```ruby
 require "pikaid"
@@ -109,10 +156,10 @@ Pikaid.valid?("0000000zzzzzzzzzzzzzzzzzzz")       #=> false (96-bit overflow)
 
 # Helper functions accept either a String or a Pikaid::Id.
 Pikaid.timestamp(parsed)                 #=> 1700000000
-Pikaid.randomness("0s44we8...")          #=> 12-byte String
+Pikaid.randomness(parsed)          #=> 12-byte String
 Pikaid.decode(parsed)                    #=> [1700000000, "..."]
 Pikaid.to_binary(parsed)                 #=> 17-byte String
-Pikaid.compare(parsed, another_id)       #=> -1, 0, or 1
+Pikaid.compare(parsed, parsed)       #=> -1, 0, or 1
 ```
 
 ### Errors
@@ -134,21 +181,7 @@ end
 - `Pikaid::RandomnessError` — the cryptographic source failed or returned the
   wrong number of bytes. Generation fails closed; there is no fallback.
 
-## Format
-
-| Property | Value |
-| --- | --- |
-| Text length | 26 lowercase ASCII Base36 characters (`0-9a-z`) |
-| Timestamp | 7 fixed-width Base36 digits, unsigned Unix seconds |
-| Timestamp range | `0..78_364_164_095` (`36^7 - 1`) |
-| Randomness | 19 fixed-width Base36 digits encoding exactly 96 bits |
-| Binary length | 17 bytes |
-| Binary layout | 5-byte unsigned big-endian timestamp + 12 entropy bytes |
-
-Text and binary forms are lossless round trips. Timestamp and randomness are
-extracted without coercion, and leading zeroes are preserved.
-
-## Ordering and security
+## 🔄 Order Guarantee
 
 - Canonical bytewise/ASCII lexicographic order is chronological **across
   different seconds**.
@@ -161,7 +194,23 @@ extracted without coercion, and leading zeroes are preserved.
   uniqueness. Treat it as a compact, sortable identifier, not as a capability
   or a security credential.
 
-## Development
+## 🛢 Storage Recommendations
+
+| Representation | Size | Recommended for |
+| --- | ---: | --- |
+| **BINARY(17)** | 17 bytes | Compact primary keys and indexes |
+| **CHAR(26)** | 26 characters | Readable SQL, debugging, URLs, and logs |
+
+Use an **ASCII bytewise/binary collation** for text columns (for example, `ascii_bin` on MariaDB/MySQL). Case-insensitive or locale-aware sorting is not a substitute for canonical bytewise comparison.
+
+## ✅ Verification and release status
+
+The [CI workflow](https://github.com/pikaid/pikaid-ruby/actions/workflows/ci.yml) runs native tests, pinned automated conformance checks, and language-specific quality gates. To run the native checks locally from a checkout, use `bundle exec rake test`.
+
+**Automated passing tests are not a security certification.** The independent CSPRNG source and failure-path audits (`P-GENERATE-RNG-SOURCE` and `P-GENERATE-RNG-FAILURE`) still require separate human evidence.
+
+<details>
+<summary>Platform, tooling, and conformance details</summary>
 
 ```sh
 bundle exec rake syntax    # ruby -c over lib, test, Rakefile, gemspec
@@ -174,8 +223,6 @@ The test suite covers every official PHP v1.2.0 vector, specification
 known-answer cases, malformed and overflow inputs, boundary values, randomized
 round trips against an independent oracle, generated-ID sanity checks, and
 cryptographic failure paths.
-
-## Conformance
 
 The official cross-language suite is
 [pikaid-specs `1.0.0`](https://github.com/pikaid/pikaid-specs/tree/059780cc0e5b113443812720d95c630649bf3aa3/conformance),
@@ -201,9 +248,35 @@ failure path, and no automated run can satisfy them. The
 `Official conformance (pinned suite)` CI job executes the automated subset
 only.
 
-## Specification and license
+</details>
 
-- [pikaid specification revision 1.0.4](https://github.com/pikaid/pikaid-specs/tree/v1.0.4)
-- [Security review packet](https://github.com/pikaid/pikaid-ruby/blob/main/SECURITY.md) — CSPRNG source and fail-closed audit map
-- [Changelog](CHANGELOG.md)
-- [MIT License](LICENSE) · Copyright (c) 2026 larananas (Lara G.)
+Registry publication is not implied by a green CI: use the installation method documented above.
+
+## 🤝 Contributing
+
+Contributions are always welcome! 💙
+
+Whether you're fixing a typo, improving documentation, adding tests, or making pikaid even better, every contribution is appreciated.
+
+**Want to help? Here's how:**
+
+- 🐛 **Found a bug?** [Open an issue](https://github.com/pikaid/pikaid-ruby/issues) with clear reproduction steps.
+- 💡 **Have an idea?** Start with an issue before making major changes.
+- 🛠️ **Ready to contribute?** Open a pull request explaining your changes.
+- 🧪 **Keep it tested.** Add meaningful regression tests for behavior changes and follow the existing conventions.
+- ✅ **Make sure CI passes.** All required checks must be green before a pull request is merged. No shortcuts!
+
+**One important rule:** pikaid's identifier format is immutable. Contributions must preserve the [canonical specification (revision 1.0.4)](https://github.com/pikaid/pikaid-specs/tree/v1.0.4).
+
+🔐 **Found a security vulnerability?** Report it privately using GitHub's security reporting (when available), or [contact the maintainer](mailto:larananas.dev@proton.me)—not through a public issue.
+
+**Every improvement matters, big or small. Thanks for helping make pikaid better!** 🐇
+
+## 📄 License
+
+The implementation is available under the [MIT License](LICENSE).
+
+## ✉️ Contact
+
+For licensing or project-related questions: [larananas.dev@proton.me](mailto:larananas.dev@proton.me).
+
