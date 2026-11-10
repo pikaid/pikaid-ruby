@@ -289,7 +289,7 @@ jobs:
           for attempt in {1..12}; do
             published="$(curl --silent --show-error --location --fail "$url" 2>/dev/null || true)"
             if [[ -n "$published" ]] && \
-               jq -e --arg expected "$VERSION" '.version == $expected' <<< "$published" >/dev/null 2>&1; then
+               jq -e --arg expected "$VERSION" '.number == $expected and .name == "pikaid"' <<< "$published" >/dev/null 2>&1; then
               echo "Published pikaid $VERSION: https://rubygems.org/gems/pikaid/versions/$VERSION"
               exit 0
             fi
