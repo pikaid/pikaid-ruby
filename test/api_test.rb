@@ -168,6 +168,8 @@ class ApiTest < PikaidTest
 
   def test_version_is_a_stable_semver_string
     assert_match(/\A\d+\.\d+\.\d+\z/, Pikaid::VERSION)
-    assert_equal "1.0.0", Pikaid::VERSION
+    specification = Gem::Specification.load(File.expand_path("../pikaid.gemspec", __dir__))
+    refute_nil specification
+    assert_equal specification.version.to_s, Pikaid::VERSION
   end
 end
