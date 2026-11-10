@@ -9,6 +9,10 @@ on:
         description: "Existing published stable release tag (for example, v1.0.0)"
         required: true
         type: string
+      rubygems_owner:
+        description: "Numeric RubyGems account ID for first publication only (leave blank afterwards)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -193,7 +197,80 @@ jobs:
               ;;
           esac
 
-      - name: Authenticate with RubyGems (OIDC trusted publishing)
+      # The released RubyGems action cannot pass an owner for a pending
+      # trusted publisher. Use the RubyGems OIDC endpoint directly once, with
+      # the numeric account ID explicitly supplied by the publisher.
+      - name: Authenticate first publication with asserted owner
+        if: ${{ inputs.rubygems_owner != '' }}
+        shell: bash
+        env:
+          RUBYGEMS_OWNER_ID: ${{ inputs.rubygems_owner }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+          from urllib.request import Request, urlopen
+
+          owner_id = os.environ["RUBYGEMS_OWNER_ID"]
+          if not re.fullmatch(r"[1-9][0-9]{0,17}", owner_id):
+              sys.exit("::error::Enter the numeric RubyGems account ID shown on Pending Trusted Publishers.")
+
+          def post_or_get_json(request, expected_status):
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      if response.status != expected_status:
+                          raise ValueError("Unexpected status")
+                      data = response.read(32769)
+                      if len(data) > 32768:
+                          raise ValueError("Oversized response")
+                      return json.loads(data)
+              except (HTTPError, URLError, ValueError) as error:
+                  raise RuntimeError("RubyGems OIDC authentication failed; check the owner ID and pending publisher configuration.") from None
+
+          oidc_url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
+          parts = urlsplit(oidc_url)
+          query = parse_qsl(parts.query, keep_blank_values=True)
+          query.append(("audience", "rubygems.org"))
+          request_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+          token_response = post_or_get_json(
+              Request(request_url, headers={
+                  "Authorization": "Bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"],
+                  "Accept": "application/json",
+              }),
+              200,
+          )
+          token = token_response.get("value")
+          if not isinstance(token, str) or not token:
+              sys.exit("::error::GitHub did not return an OIDC token.")
+
+          result = post_or_get_json(
+              Request(
+                  "https://rubygems.org/api/v1/oidc/trusted_publisher/exchange_token",
+                  data=json.dumps({"jwt": token, "owner": owner_id}).encode("utf-8"),
+                  headers={"Content-Type": "application/json", "Accept": "application/json"},
+                  method="POST",
+              ),
+              201,
+          )
+          key = result.get("rubygems_api_key")
+          if not isinstance(key, str) or not re.fullmatch(r"rubygems_[A-Za-z0-9]+", key):
+              sys.exit("::error::RubyGems returned an invalid temporary publishing credential.")
+          if result.get("scopes") != ["push_rubygem"]:
+              sys.exit("::error::RubyGems did not grant only the required push scope.")
+
+          print(f"::add-mask::{key}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.write(f"GEM_HOST_API_KEY={key}\n")
+          print("Authenticated for the first publication with a short-lived, push-only credential.")
+          PY
+
+      - name: Authenticate existing gem (OIDC trusted publishing)
+        if: ${{ inputs.rubygems_owner == '' }}
         uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
 
       - name: Publish to RubyGems
