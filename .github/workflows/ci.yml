@@ -267,11 +267,11 @@ jobs:
           loaded = $LOADED_FEATURES.grep(%r{/pikaid\.rb\z}).first
           abort "pikaid was not loaded from the installed gem: #{loaded.inspect}" unless loaded
           abort "pikaid loaded outside GEM_HOME: #{loaded}" unless loaded.start_with?(ENV.fetch("GEM_HOME"))
-          abort "unexpected pikaid version: #{Pikaid::VERSION}" unless Pikaid::VERSION == "1.0.0"
+          abort "installed gem version mismatch: #{Pikaid::VERSION}" unless Pikaid::VERSION == ENV.fetch("GEM_EXPECTED_VERSION")
 
           puts "consumer smoke OK: #{loaded}"
           RUBY
-          ruby -w consumer.rb
+          GEM_EXPECTED_VERSION="$(ruby -rrubygems/package -e 'files = Dir[File.join(ENV.fetch("GITHUB_WORKSPACE"), "pikaid-*.gem")]; abort "Expected exactly one built gem" unless files.one?; puts Gem::Package.new(files.first).spec.version')" ruby -w consumer.rb
 
       - name: Verify packaged file inventory
         run: |
